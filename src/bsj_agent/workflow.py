@@ -21,7 +21,6 @@ from .agents import (
     bsj_thumbnail_promptor,
     bsj_captioner,
     bsj_voiceover,
-    bsj_newsletter_rewriter,
 )
 
 
@@ -42,7 +41,6 @@ class BsjPipeline:
         self.thumbnail_promptor = bsj_thumbnail_promptor()
         self.captioner = bsj_captioner()
         self.voiceover = bsj_voiceover()
-        self.newsletter_rewriter = bsj_newsletter_rewriter()
 
     # Run the BSJ pipeline
     def run(self, topic: str) -> Dict[str, Any]:
@@ -63,9 +61,9 @@ class BsjPipeline:
         # Voiceover
         session = self.voiceover.run(session)
 
-        # Optional newsletter
-        if self.include_newsletter:
-            session = self.newsletter_rewriter.run(session)
+        # Optional newsletter (not implemented in simple pipeline; use ADK path below)
+        # if self.include_newsletter:
+        #     session = self.newsletter_rewriter.run(session)
 
         return session
 
