@@ -1,19 +1,32 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict
 
 # ADK imports for the async-first agent runner path. We orchestrate them
 # synchronously by using InMemoryRunner which exposes a sync .run() wrapper.
 try:
     from google.adk.agents import LlmAgent
+    from google.adk.agents import SequentialAgent, ParallelAgent
     from google.adk.runners import InMemoryRunner
     from google.genai import types
+    # MCP tooling (optional): used to connect Tavily/Firecrawl MCP servers
+    from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
+    from google.adk.tools.mcp_tool.mcp_session_manager import (
+        SseConnectionParams,
+        StreamableHTTPConnectionParams,
+    )
 except Exception:
     # Keep local stubs usable even if ADK is not installed; the ADK path will
     # be guarded when invoked.
     LlmAgent = None  # type: ignore
+    SequentialAgent = None  # type: ignore
+    ParallelAgent = None  # type: ignore
     InMemoryRunner = None  # type: ignore
     types = None  # type: ignore
+    MCPToolset = None  # type: ignore
+    SseConnectionParams = None  # type: ignore
+    StreamableHTTPConnectionParams = None  # type: ignore
 
 from .agents import (
     bsj_researcher,
@@ -22,6 +35,66 @@ from .agents import (
     bsj_captioner,
     bsj_voiceover,
 )
+
+
+# Debug helpers to trace tool usage in researcher stages
+def _debug_before_tool(tool: Any, args: dict[str, Any], tool_context: Any) -> None:
+    try:
+        name = getattr(tool, 'name', tool.__class__.__name__)
+        print(f"[TOOL> before] {name} args={args}")
+    except Exception:
+        pass
+
+
+def _debug_after_tool(tool: Any, args: dict[str, Any], tool_context: Any, tool_response: dict) -> None:
+    try:
+        name = getattr(tool, 'name', tool.__class__.__name__)
+        # Truncate large responses for readability
+        preview = str(tool_response)
+        if len(preview) > 500:
+            preview = preview[:500] + '...<truncated>'
+        print(f"[TOOL< after] {name} resp={preview}")
+    except Exception:
+        pass
+
+
+def build_bsj_adk_agent(*, include_newsletter: bool = False, debug: bool = False):
+    """
+    Build the BSJ pipeline using per-agent factories, composed with ADK-native
+    SequentialAgent and ParallelAgent. This constructs the graph only.
+    """
+    if SequentialAgent is None or ParallelAgent is None:
+        raise RuntimeError("ADK not available. Install google-adk and retry.")
+
+    # Import factories from agent packages
+    from .agents.researcher import create_agent as create_researcher
+    from .agents.scriptwriter import create_agent as create_scriptwriter
+    from .agents.thumbnail_promptor import create_agent as create_thumb
+    from .agents.captioner import create_agent as create_captioner
+    from .agents.voiceover import create_agent as create_voiceover
+
+    researcher = create_researcher(debug=debug)
+    scriptwriter = create_scriptwriter()
+    thumbnail_promptor = create_thumb()
+    captioner = create_captioner()
+    voiceover = create_voiceover()
+
+    assets_parallel = ParallelAgent(
+        name="bsj_assets_parallel",
+        sub_agents=[thumbnail_promptor, captioner],
+    )
+
+    sub_agents = [researcher, scriptwriter, assets_parallel, voiceover]
+
+    # Optional newsletter can be added later as its own package
+    if include_newsletter:
+        try:
+            from .agents.newsletter import create_agent as create_newsletter
+            sub_agents.append(create_newsletter())
+        except Exception:
+            raise RuntimeError("Newsletter agent package not found. Create bsj_agent/agents/newsletter.")
+
+    return SequentialAgent(name="bsj_pipeline", sub_agents=sub_agents)
 
 
 class BsjPipeline:
@@ -103,18 +176,80 @@ def run_adk_pipeline(topic: str, include_newsletter: bool = False, *, debug: boo
     if debug:
         print(f"[RUN {run_id}] topic={topic}")
 
+    # Optionally construct MCP toolsets for researcher stage (Tavily search + Firecrawl fetch)
+    researcher_tools: list[Any] = []
+    try:
+        if MCPToolset is not None and (SseConnectionParams is not None or StreamableHTTPConnectionParams is not None):
+            tavily_url = os.getenv("TAVILY_MCP_URL", "").strip()
+            tavily_key = os.getenv("TAVILY_API_KEY", "").strip()
+            firecrawl_url = os.getenv("FIRECRAWL_MCP_URL", "").strip()
+            firecrawl_key = os.getenv("FIRECRAWL_API_KEY", "").strip()
+            if debug:
+                print(
+                    f"[MCP] Env detected: tavily_url={'set' if tavily_url else 'unset'}, firecrawl_url={'set' if firecrawl_url else 'unset'}"
+                )
+
+            # Tavily: prefer Streamable HTTP client when URL is HTTPS without explicit /sse
+            if tavily_url:
+                try:
+                    conn = StreamableHTTPConnectionParams(url=tavily_url, headers=(
+                        {"Authorization": f"Bearer {tavily_key}"} if tavily_key else None
+                    ))
+                    researcher_tools.append(MCPToolset(connection_params=conn))
+                    if debug:
+                        print("[MCP] Tavily toolset configured")
+                except Exception as e:
+                    if debug:
+                        print(f"[MCP] Tavily toolset error: {e}")
+
+            # Firecrawl typically exposes SSE endpoint
+            if firecrawl_url:
+                try:
+                    conn = SseConnectionParams(url=firecrawl_url, headers=(
+                        {"Authorization": f"Bearer {firecrawl_key}"} if firecrawl_key else None
+                    ))
+                    researcher_tools.append(MCPToolset(connection_params=conn))
+                    if debug:
+                        print("[MCP] Firecrawl toolset configured")
+                except Exception as e:
+                    if debug:
+                        print(f"[MCP] Firecrawl toolset error: {e}")
+    except Exception as e:
+        if debug:
+            print(f"[MCP] Toolset setup failed: {e}")
+    if debug:
+        try:
+            print(f"[MCP] researcher_tools count: {len(researcher_tools)}")
+            for i, t in enumerate(researcher_tools):
+                try:
+                    # Best effort to print connection URL for MCPToolset
+                    conn = getattr(t, 'connection_params', None)
+                    url = getattr(conn, 'url', None) if conn else None
+                    print(f"[MCP] toolset[{i}] class={t.__class__.__name__} url={url}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     # 1) Researcher — reads topic, writes research
     researcher = LlmAgent(
         name="bsj_researcher",
-        model="gemini-2.5-flash",
+        model="gemini-2.5-pro",
         description="Research subtopics, key stats, and citations for the BSJ topic.",
         instruction=(
             "You are the BSJ researcher. Read session.state.topic and stay STRICTLY on that topic.\n"
-            "Output ONLY JSON under 'research' with keys: topics[], key_stats[], citations[{title,url}].\n"
-            "Do not reinterpret or change the topic. If unsure, acknowledge uncertainty but remain on-topic."
+            "Use tools FIRST: perform SEARCH using a tool whose name contains 'search' or 'web'; then FETCH full content using a tool whose name contains 'crawl' or 'fetch'. (Examples: Tavily via MCP, Firecrawl via MCP.)\n"
+            "Do not answer until you have used at least one search tool and one fetch/crawl tool. If tools are unavailable, return {\"research\": {\"topics\": [], \"key_stats\": [], \"citations\": []}, \"error\": \"TOOLS_UNAVAILABLE\"}.\n"
+            "Style: Plan -> Tool calls -> Synthesis -> JSON only.\n"
+            "Example (abbrev.): Plan: search 'AI Africa fintech inclusion' -> fetch top 3 result URLs -> extract stats -> output JSON.\n"
+            "Synthesize facts and key stats ONLY from fetched content.\n"
+            "Respond with ONLY valid JSON (no markdown) as {\"research\": {\"topics\": [], \"key_stats\": [], \"citations\": [{\"title\": \"...\", \"url\": \"...\"}]}}.\n"
+            "Provide at least 3 citations with accurate titles and URLs. Avoid unrelated domains; remain on session.state.topic."
         ),
         output_key="research",
-        tools=[],
+        tools=researcher_tools,
+        before_tool_callback=_debug_before_tool if debug else None,
+        after_tool_callback=_debug_after_tool if debug else None,
     )
 
     state: Dict[str, Any] = {"topic": topic}
@@ -122,6 +257,43 @@ def run_adk_pipeline(topic: str, include_newsletter: bool = False, *, debug: boo
         print(f"[START:bsj_researcher] run={run_id}")
     state = _adk_run_single_stage(agent=researcher, state=state, expected_key="research", debug=debug, run_id=run_id)
     _validate_stage_output(state, key="research", expected_type=dict)
+    # Retry researcher if empty/minimal content
+    try:
+        r = state.get("research", {}) if isinstance(state.get("research"), dict) else {}
+        topics = r.get("topics", []) if isinstance(r, dict) else []
+        key_stats = r.get("key_stats", []) if isinstance(r, dict) else []
+        citations = r.get("citations", []) if isinstance(r, dict) else []
+        needs_retry = (
+            not isinstance(topics, list) or len(topics) < 3 or
+            not isinstance(key_stats, list) or len(key_stats) < 3 or
+            not isinstance(citations, list) or len(citations) < 3
+        )
+        if needs_retry:
+            if debug:
+                print("[RETRY:bsj_researcher] Detected empty or insufficient research. Retrying with strict schema and tool usage.")
+            researcher_repair = LlmAgent(
+                name="bsj_researcher_repair",
+                model="gemini-2.5-pro",
+                description="Repair research to required schema using search+fetch tools.",
+                instruction=(
+                    "You must use tools in this order: 1) SEARCH using a tool with name containing 'search' or 'web'; 2) FETCH full pages using a tool with name containing 'crawl' or 'fetch'; then synthesize from fetched text only.\n"
+                    "Style: Plan -> Tool calls -> Synthesis -> JSON only. Example: search 'AI Africa fintech' -> fetch 3 URLs -> extract numeric stats -> output JSON.\n"
+                    "Do not answer until at least one search and one fetch/crawl tool have been used; otherwise return an empty research object plus error=TOOLS_UNAVAILABLE.\n"
+                    "Respond ONLY with JSON (no markdown) as {\"research\": {\"topics\":[5-8 short strings], \"key_stats\":[5-8 concise facts with numbers], \"citations\":[{\"title\":\"...\",\"url\":\"...\"}]}}.\n"
+                    "Provide >=3 citations with accurate titles and working URLs. Stay strictly on session.state.topic."
+                ),
+                output_key="research",
+                tools=researcher_tools,
+                before_tool_callback=_debug_before_tool if debug else None,
+                after_tool_callback=_debug_after_tool if debug else None,
+            )
+            if debug:
+                print(f"[START:bsj_researcher_repair] run={run_id}")
+            state = _adk_run_single_stage(agent=researcher_repair, state=state, expected_key="research", debug=debug, run_id=run_id)
+            _validate_stage_output(state, key="research", expected_type=dict)
+    except Exception as e:
+        if debug:
+            print(f"[RETRY:bsj_researcher] check error: {e}")
 
     # 2) Scriptwriter — reads research, writes script
     scriptwriter = LlmAgent(
@@ -354,8 +526,8 @@ def _adk_run_single_stage(*, agent: Any, state: Dict[str, Any], expected_key: st
     try:
         sess = runner._in_memory_session_service.get_session_sync(  # type: ignore[attr-defined]
             app_name=runner.app_name,
-            user_id="bsj_user",
-            session_id="bsj_session",
+            user_id=f"bsj_user_{run_id}",
+            session_id=f"bsj_{run_id}_{agent.name}",
         )
         raw_state = getattr(sess, "state", {}) or {}
     except Exception:
