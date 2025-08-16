@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bsj-agent"
+version = "0.1.0"
+description = "Black Street Journal (BSJ) multi-agent pipeline built on Google ADK"
+readme = "README.md"
+authors = [
+  { name = "BSJ Team" }
+]
+requires-python = ">=3.10"
+dependencies = [
+  "google-adk",
+  "python-dotenv>=1.0.1",
+]
+
+[project.scripts]
+bsj-run = "bsj_agent.run:main"
+
+[project.urls]
+Homepage = "https://github.com/blackstreet-ai/bsj-agent"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

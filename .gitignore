@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+env/
+
+# Packages
+*.egg
+*.egg-info/
+dist/
+build/
+wheels/
+
+# IDEs/Editors
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Testing/coverage
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Type checkers
+.mypy_cache/
+.pyre/
+.pytype/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Project
+.env
+src/bsj_agent.egg-info/
