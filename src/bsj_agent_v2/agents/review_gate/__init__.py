@@ -127,11 +127,12 @@ def create_review_agent(
 
     # Instruction: be explicit that the agent should call the HITL tool.
     instruction = (
-        "You are a review checkpoint. Do not rewrite content."
-        "\n1) Read the Markdown stored at session.state.%s."
-        "\n2) Summarize any risks or open questions in 1-2 sentences."
-        "\n3) Call ask_for_approval(reason=...) to request human approval."
-        "\n4) Wait for approval to continue."
+        "You are a STRICT review checkpoint."
+        "\n- Do NOT generate normal text output."
+        "\n- Read session.state.%s silently."
+        "\n- Your ONLY action is to CALL the long-running tool"
+        " ask_for_approval(reason=...) to request human approval."
+        "\n- After calling the tool, STOP and WAIT. Do not produce any other content."
         % markdown_state_key
     )
 
@@ -149,7 +150,11 @@ def create_review_agent(
         ),
         instruction=instruction,
         tools=[LongRunningFunctionTool(func=ask_for_approval)],
-        generate_content_config=types.GenerateContentConfig(temperature=0.0)
+        generate_content_config=types.GenerateContentConfig(
+            temperature=0.0,
+            max_output_tokens=16,
+            candidate_count=1,
+        )
         if types is not None
         else None,
     )
