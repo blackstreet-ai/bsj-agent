@@ -26,6 +26,12 @@ def create_agent() -> Any:
     )
 
     def _after(callback_context, llm_response):
+        """Parse JSON, store Markdown in state, and return original response.
+
+        - Structured: state['voiceover']
+        - Markdown: state['voiceover_markdown']
+        - Return llm_response to keep ADK postprocessors intact.
+        """
         try:
             text = ""
             if getattr(llm_response, "content", None) and llm_response.content.parts:
@@ -46,9 +52,13 @@ def create_agent() -> Any:
             elif vo:
                 lines.append(str(vo))
             md = "\n".join(lines)
-            return md
+            try:
+                callback_context.state["voiceover_markdown"] = md
+            except Exception:
+                pass
+            return llm_response
         except Exception:
-            return None
+            return llm_response
 
     return LlmAgent(
         name="bsj_voiceover",

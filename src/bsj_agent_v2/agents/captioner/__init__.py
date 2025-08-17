@@ -26,6 +26,12 @@ def create_agent() -> Any:
     )
 
     def _after(callback_context, llm_response):
+        """Parse JSON, store Markdown in state, and return original response.
+
+        - Keeps ADK postprocessing intact by returning `llm_response`.
+        - Stores structured content in state['captions'] and a Markdown view in
+          state['captions_markdown'] for UI consumption.
+        """
         try:
             text = ""
             if getattr(llm_response, "content", None) and llm_response.content.parts:
@@ -51,9 +57,13 @@ def create_agent() -> Any:
             elif caps:
                 lines.append(str(caps))
             md = "\n".join(lines)
-            return md
+            try:
+                callback_context.state["captions_markdown"] = md
+            except Exception:
+                pass
+            return llm_response
         except Exception:
-            return None
+            return llm_response
 
     return LlmAgent(
         name="bsj_captioner",

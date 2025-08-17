@@ -26,6 +26,12 @@ def create_agent() -> Any:
     )
 
     def _after(callback_context, llm_response):
+        """Parse JSON, store Markdown in state, and return original response.
+
+        - Structured: state['thumbnail_prompts']
+        - Markdown: state['thumbnail_prompts_markdown']
+        - Return llm_response to keep ADK postprocessors intact.
+        """
         try:
             text = ""
             if getattr(llm_response, "content", None) and llm_response.content.parts:
@@ -48,9 +54,13 @@ def create_agent() -> Any:
                 for p in (prompts if isinstance(prompts, list) else [prompts]):
                     lines.append(f"- {p}")
             md = "\n".join(lines)
-            return md
+            try:
+                callback_context.state["thumbnail_prompts_markdown"] = md
+            except Exception:
+                pass
+            return llm_response
         except Exception:
-            return None
+            return llm_response
 
     return LlmAgent(
         name="bsj_thumbnail_promptor",

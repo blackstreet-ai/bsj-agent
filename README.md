@@ -5,6 +5,7 @@ Black Street Journal (BSJ) multi-agent pipeline built on Google ADK.
 ## Prerequisites
 - Python 3.10+
 - Recommended: virtual environment
+- GOOGLE_API_KEY environment variable for Gemini models (used by ADK). See `.env.example`.
 
 ## Setup
 ```bash
@@ -28,7 +29,16 @@ Required env vars:
 - `FIRECRAWL_MCP_URL` (e.g. `https://mcp.firecrawl.dev/${FIRECRAWL_API_KEY}/sse`)
 - `FIRECRAWL_API_KEY`
 
-Example run:
+## Running
+Preferred (v2 ADK-native pipeline):
+```bash
+# Ensure GOOGLE_API_KEY is set in environment or .env
+PYTHONPATH=src python -m bsj_agent_v2.runner.cli --topic "AI in African fintech"
+
+# Example output: final session.state as pretty JSON (research/script/voiceover and Markdown keys)
+```
+
+Legacy (v1) runner is still available:
 ```bash
 # Using venv console script
 .venv/bin/bsj-run "AI in African fintech" --adk-multistage --print-json --debug
@@ -38,8 +48,8 @@ PYTHONPATH=src python -m bsj_agent.run "AI in African fintech" --adk-multistage 
 ```
 
 Notes:
-- The pipeline will auto-detect MCP variables and attach toolsets to the researcher stage.
-- If MCP servers are unreachable, the researcher falls back to model-only behavior (still enforced to output JSON), and validators/retries apply.
+- The pipeline will auto-detect MCP variables and attach toolsets to the researcher stage when configured.
+- If MCP servers are unreachable, the researcher falls back to model-only behavior (JSON-structured outputs are still expected), and validators/retries apply.
 
 ## Development
 Project layout:
@@ -50,15 +60,30 @@ src/
     tools/                  # tool_* stubs
     workflow.py             # Orchestration
     run.py                  # Entrypoint
+  bsj_agent_v2/
+    agents/
+      researcher/
+      scriptwriter/
+      thumbnail_promptor/
+      captioner/
+      voiceover/
+      review_gate/          # Human review gate agent factories
+    runner/
+      cli.py                # Minimal CLI for InMemoryRunner
+    tools/
+      mcp_utils.py          # Shared MCP helpers (if applicable)
+    workflow.py             # ADK-native orchestration (v2)
 ```
 
-## Running
-```bash
-# Ensure google-adk is installed by pip (installed via pyproject)
-python -m bsj_agent.run
-```
+### v2 Orchestration overview
+The v2 pipeline composes ADK agents in `bsj_agent_v2/workflow.py`:
 
-If google-adk isn't installed yet, the runner will warn and exit gracefully.
+- researcher → research_review → scriptwriter → script_review → (thumbnail_promptor || captioner) → voiceover
+- Human review gates are implemented via `review_gate` with these state keys:
+  - `research_markdown` + `research_review` (approval/notes)
+  - `script_markdown` + `script_review` (approval/notes)
+
+Outputs are written back to `session.state` and rendered as Markdown alongside structured data, e.g. `voiceover` and `voiceover_markdown`.
 
 ### Troubleshooting: module import in editable mode
 If `python -m bsj_agent.run ...` fails with `ModuleNotFoundError: No module named 'bsj_agent'` even after `pip install -e .`, add the source path to `PYTHONPATH` or use the venv console script:
@@ -76,7 +101,7 @@ python -m bsj_agent.run "Your topic" --adk-multistage --print-json
 ```
 
 ## Roadmap
-- Implement bsj_researcher → bsj_scriptwriter → (thumbnail+captioner) → bsj_voiceover
-- Add human review gates between major stages
-- Wire stub tools: web_search, fetch_url, elevenlabs_tts
+- v2 agent graph implemented: researcher → review → scriptwriter → review → (thumbnail+captioner) → voiceover
+- Human review gates implemented for research and script stages
+- Wire stub tools: web_search, fetch_url, elevenlabs_tts (continue integration and tests)
 - Add evaluation harness and example dataset

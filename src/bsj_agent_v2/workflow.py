@@ -21,7 +21,7 @@ from .agents.scriptwriter import create_agent as create_scriptwriter
 from .agents.thumbnail_promptor import create_agent as create_thumbnail_promptor
 from .agents.captioner import create_agent as create_captioner
 from .agents.voiceover import create_agent as create_voiceover
- 
+from .agents.review_gate import create_review_agent as create_review_gate
 
 
 def build_root(*, debug: bool = False) -> Any:
@@ -35,7 +35,17 @@ def build_root(*, debug: bool = False) -> Any:
         raise RuntimeError("ADK not available. Install google-adk and retry.")
 
     researcher = create_researcher(debug=debug)
+    research_review = create_review_gate(
+        name="bsj_research_review",
+        markdown_state_key="research_markdown",
+        approval_state_key="research_review",
+    )
     scriptwriter = create_scriptwriter()
+    script_review = create_review_gate(
+        name="bsj_script_review",
+        markdown_state_key="script_markdown",
+        approval_state_key="script_review",
+    )
     assets_parallel = ParallelAgent(
         name="bsj_assets_parallel",
         sub_agents=[create_thumbnail_promptor(), create_captioner()],
@@ -46,7 +56,9 @@ def build_root(*, debug: bool = False) -> Any:
         name="bsj_pipeline_v2",
         sub_agents=[
             researcher,
+            research_review,
             scriptwriter,
+            script_review,
             assets_parallel,
             voiceover,
         ],
