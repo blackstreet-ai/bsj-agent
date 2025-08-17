@@ -29,11 +29,13 @@ def create_agent() -> Any:
     )
 
     def _after(callback_context, llm_response):
-        """Parse JSON into state and return Markdown summary instead of raw JSON.
+        """Parse JSON, store Markdown in state, and return the original response.
 
-        ADK detail: Returning non-None content from after_model_callback replaces
-        the model's event content in the chat UI (see `BaseAgent.__handle_after_agent_callback`).
-        We also update `session.state['script']` with parsed JSON for downstream agents.
+        ADK expects an LLM response object flowing through postprocessors.
+        Returning a raw string can break downstream processors. We therefore:
+        - Parse and store structured JSON at state['script'].
+        - Build Markdown and store at state['script_markdown'] for UI.
+        - Return `llm_response` to keep the flow ADK-compatible.
         """
         try:
             text = ""
@@ -66,10 +68,14 @@ def create_agent() -> Any:
                 lines.append(str(draft))
 
             md = "\n".join(lines)
-            return md
+            try:
+                callback_context.state["script_markdown"] = md
+            except Exception:
+                pass
+            return llm_response
         except Exception:
-            # If parsing fails, fall back to default rendering
-            return None
+            # Fall back to letting ADK render the original response
+            return llm_response
 
     return LlmAgent(
         name="bsj_scriptwriter",
