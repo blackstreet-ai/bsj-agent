@@ -60,7 +60,7 @@ def _make_review_tool(approval_state_key: str, markdown_state_key: str):
       A callable suitable to wrap with `LongRunningFunctionTool`.
     """
 
-    def ask_for_approval(reason: str, tool_context: ToolContext) -> Dict[str, Any]:
+    def ask_for_approval(reason: str, tool_context: ToolContext) -> Dict[str, Any] | None:
         """Request approval for the current artifact in state.
 
         Parameters:
@@ -86,15 +86,21 @@ def _make_review_tool(approval_state_key: str, markdown_state_key: str):
                 "has_markdown": bool(markdown),
                 "created_at": _now_iso(),
             }
+            # Hint the UI to not replace the pending card with a summary
+            # (mirrors sample get_user_choice_tool behavior)
+            try:
+                tool_context.actions.skip_summarization = True
+            except Exception:
+                pass
         except Exception:
             # Swallow state errors to avoid breaking the pause behavior
             pass
 
-        # Returning 'pending' signals ADK to pause this run until resolved.
-        return {
-            "status": "pending",
-            "ticketId": f"hitl-{approval_state_key}-{int(datetime.now().timestamp())}",
-        }
+        # For LongRunningFunctionTool, returning None marks the call as pending
+        # and surfaces a resolvable card in the Web UI. The human will submit the
+        # final tool response (e.g., {"status": "approved" | "rejected", ...})
+        # via the UI, which resumes the pipeline.
+        return None
 
     return ask_for_approval
 
